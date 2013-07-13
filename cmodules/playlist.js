@@ -92,7 +92,7 @@ function Playlist(chan) {
                     item: item.pack(),
                     after: item.prev ? item.prev.uid : "prepend"
                 });
-                chan.broadcastPlaylistMeta();
+                chan.sendAll("setPlaylistMeta", this.calcMeta());
                 chan.cacheMedia(item.media);
             }
         });
@@ -126,8 +126,7 @@ function Playlist(chan) {
 
         pl.remove(data, function () {
             chan.sendAll("delete", { uid: data });
-            // TODO move this to playlist
-            chan.broadcastPlaylistMeta();
+            chan.sendAll("setPlaylistMeta", this.calcMeta());
         });
     }, Priority.HIGH);
 
@@ -146,6 +145,46 @@ function Playlist(chan) {
             chan.sendAll("moveVideo", data);
         });
     }, Priority.HIGH);
+
+    chan.onUserEvent("jumpTo", function (user, data) {
+        if(!chan.hasPermission(user, "playlistjump"))
+            return false;
+
+        if(typeof data !== "number")
+            return false;
+
+        pl.jump(data);
+    }, Priority.MEDIUM);
+
+    chan.onUserEvent("playNext", function (user, data) {
+        if(!chan.hasPermission(user, "playlistjump"))
+            return false;
+
+        pl.next();
+    }, Priority.MEDIUM);
+
+    chan.onUserEvent("clearPlaylist", function (user, data) {
+        if(!chan.hasPermission(user, "playlistclear"))
+            return false;
+
+        pl.clear();
+
+        chan.sendAll("playlist", []);
+        chan.sendAll("setPlaylistMeta", this.calcMeta());
+    }, Priority.MEDIUM);
+
+    chan.onUserEvent("requestMedia", function (user, data) {
+        if(pl.current !== null) {
+            user.socket.emit("changeMedia", pl.current.media.fullupdate());
+            user.socket.emit("setCurrent", pl.current.uid);
+        }
+    }, Priority.MEDIUM);
+
+    chan.onUserEvent("requestPlaylist", function (user, data) {
+        user.socket.emit("playlist", pl.items.toArray());
+        if(pl.current !== null)
+            user.socket.emit("setCurrent", pl.current.uid);
+    }, Priority.MEDIUM);
 
     if(chan) {
         this.channel = chan;
@@ -177,6 +216,22 @@ function Playlist(chan) {
             });
         });
     }
+}
+
+Playlist.prototype.calcMeta = function () {
+    var total = 0;
+    var iter = this.items.first;
+    while(iter !== null) {
+        if(iter.media !== null)
+            total += iter.media.seconds;
+        iter = iter.next;
+    }
+    var timestr = foramtTime(total);
+    this.meta = {
+        count: this.items.length,
+        time: timestr
+    };
+    return this.meta;
 }
 
 Playlist.prototype.queueAction = function(data) {
