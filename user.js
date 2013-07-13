@@ -82,6 +82,20 @@ User.prototype.noflood = function(name, hz) {
 }
 
 User.prototype.initCallbacks = function() {
+    const cmodevents = [
+        "queue",
+        "setTemp",
+        "delete",
+        "moveMedia"
+    ];
+
+    cmodevents.forEach(function (ev) {
+        this.socket.on(ev, function (data) {
+            if(this.channel !== null)
+                this.channel.onUserEvent(ev)(this, data);
+        }.bind(this));
+    }.bind(this));
+
     this.socket.on("disconnect", function() {
         if(this.channel != null)
             this.channel.userLeave(this);
@@ -199,33 +213,9 @@ User.prototype.initCallbacks = function() {
         }
     }.bind(this));
 
-    this.socket.on("queue", function(data) {
-        if(this.channel != null) {
-            this.channel.tryQueue(this, data);
-        }
-    }.bind(this));
-
-    this.socket.on("setTemp", function(data) {
-        if(this.channel != null) {
-            this.channel.trySetTemp(this, data);
-        }
-    }.bind(this));
-
-    this.socket.on("delete", function(data) {
-        if(this.channel != null) {
-            this.channel.tryDequeue(this, data);
-        }
-    }.bind(this));
-
     this.socket.on("uncache", function(data) {
         if(this.channel != null) {
             this.channel.tryUncache(this, data);
-        }
-    }.bind(this));
-
-    this.socket.on("moveMedia", function(data) {
-        if(this.channel != null) {
-            this.channel.tryMove(this, data);
         }
     }.bind(this));
 

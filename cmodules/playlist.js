@@ -49,28 +49,36 @@ function Playlist(chan) {
     this.action_queue = [];
     this._qaInterval = false;
 
+    // Register event handlers
     var pl = this;
     chan.onUserEvent("queue", function(user, data) {
+        // TODO support data.list
         if(!chan.hasPermission(user, "playlistadd"))
-            return;
+            return false;
 
         if(typeof data.pos !== "string")
-            return;
+            return false;
 
-        if(typeof data.type !== "string" && !chan.isCached(data.id))
-            return;
+        if(typeof data.type !== "string")
+            return false;
 
         if(data.pos === "next" && !chan.hasPermission(user, "playlistnext"))
-            return;
+            return false;
+
+        if(isLive(data.type && !chan.hasPermission(user, "playlistaddlive"))) {
+            user.socket.emit("queueFail", "You don't have permission to queue livestreams");
+            return false;
+        }
 
         if(user.rank < 1.5 && user.noflood("queue", 1.5))
-            return;
+            return false;
 
         data.queueby = user.name;
         data.temp = isLive(data.type) || !chan.hasPermission(user, "addnontemp");
         data.maxlength = chan.hasPermission(user, "exceedmaxlength")
                             ? 0
                             : chan.opts.maxlength;
+        // TODO check if video is cached
         pl.addMedia(data, function(err, item) {
             if(err) {
                 if(err === true)
@@ -87,6 +95,55 @@ function Playlist(chan) {
                 chan.broadcastPlaylistMeta();
                 chan.cacheMedia(item.media);
             }
+        });
+    }, Priority.HIGH);
+
+    chan.onUserEvent("setTemp", function(user, data) {
+        if(!chan.hasPermission(user, "settemp"))
+            return false;
+
+        if(typeof data.uid !== "number" || typeof data.temp !== "boolean")
+            return false;
+
+        var item = pl.items.find(data.uid);
+        if(!item)
+            return false;
+
+        item.temp = data.temp;
+        chan.sendAll("setTemp", data);
+
+        if(!temp) {
+            chan.cacheMedia(item.media);
+        }
+    }, Priority.HIGH);
+
+    chan.onUserEvent("delete", function(user, data) {
+        if(!chan.hasPermission(user, "playlistdelete"))
+            return false;
+
+        if(typeof data !== "number")
+            return false;
+
+        pl.remove(data, function () {
+            chan.sendAll("delete", { uid: data });
+            // TODO move this to playlist
+            chan.broadcastPlaylistMeta();
+        });
+    }, Priority.HIGH);
+
+    chan.onUserEvent("moveMedia", function(user, data) {
+        if(!chan.hasPermission(user, "playlistmove"))
+            return false;
+
+        if(typeof data.from !== "number")
+            return false;
+
+        if(typeof data.after !== "number" && typeof data.after !== "string")
+            return false;
+
+        pl.move(data.from, data.after, function () {
+            data.moveby = data.moveby || user.name;
+            chan.sendAll("moveVideo", data);
         });
     }, Priority.HIGH);
 

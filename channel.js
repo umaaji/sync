@@ -25,7 +25,7 @@ var Auth = require("./auth.js");
 var ChatCommand = require("./chatcommand.js");
 var Filter = require("./filter.js").Filter;
 var ActionLog = require("./actionlog");
-var Playlist = require("./playlist");
+var Playlist = require("./cmodules/playlist");
 var sanitize = require("validator").sanitize;
 
 var Channel = function(name) {
@@ -33,6 +33,7 @@ var Channel = function(name) {
     this.initialized = false;
 
     this.name = name;
+    this.handlers = {};
     // Initialize defaults
     this.registered = false;
     this.users = [];
@@ -121,6 +122,36 @@ var Channel = function(name) {
     Database.loadChannel(this);
     if(this.registered) {
         this.loadDump();
+    }
+}
+
+Channel.prototype.onUserEvent = function(evname, fn, priority) {
+    if(typeof fn === "undefined") {
+        if(!(evname in this.handlers))
+            return false;
+
+        return function () {
+            var args = arguments;
+            this.handlers[evname].forEach(function (handler) {
+                handler.fn.apply(this, args);
+            });
+        }.bind(this);
+    } else {
+        if(!(evname in this.handlers))
+            this.handlers[evname] = [];
+
+        console.log("attached handler for", evname, "with priority", priority);
+
+        this.handlers[evname].push({
+            fn: fn,
+            priority: priority
+        });
+
+        this.handlers[evname].sort(function (a, b) {
+            var x = a.priority;
+            var y = b.priority;
+            return x == y ? 0 : (x < y ? -1 : 1);
+        });
     }
 }
 
@@ -1044,241 +1075,6 @@ Channel.prototype.autoTemp = function(item, user) {
     }
 }
 
-Channel.prototype.enqueue = function(data, user, callback) {
-    var after = "";
-    var current = this.playlist.current;
-    if(data.pos == "next") {
-        after = current ? current.uid : "prepend";
-    }
-    else if(data.pos == "end") {
-        after = "append";
-    }
-
-    if(isLive(data.type) && !this.hasPermission(user, "playlistaddlive")) {
-        user.socket.emit("queueFail", "You don't have permission to queue livestreams");
-        return;
-    }
-
-    // Prefer cache over looking up new data
-    if(data.id in this.library) {
-        var media = this.library[data.id].dup();
-        var item = this.playlist.makeItem(media);
-        item.queueby = user ? user.name : "";
-        this.autoTemp(item, user);
-        this.queueAdd(item, after);
-        this.logger.log("*** Queued from cache: id=" + data.id);
-        if(callback)
-            callback();
-    }
-    else {
-        switch(data.type) {
-            case "yt":
-            case "yp":
-            case "vi":
-            case "dm":
-            case "sc":
-                InfoGetter.getMedia(data.id, data.type, function(err, media) {
-                    if(err) {
-                        if(callback)
-                            callback();
-                        if(err === true)
-                            err = false;
-                        user.socket.emit("queueFail", err);
-                        return;
-                    }
-                    var item = this.playlist.makeItem(media);
-                    item.queueby = user ? user.name : "";
-                    this.autoTemp(item, user);
-                    this.queueAdd(item, after);
-                    this.cacheMedia(media);
-                    if(data.type == "yp")
-                        after = item.uid;
-                    if(callback)
-                        callback();
-                }.bind(this));
-                break;
-            case "li":
-                var media = new Media(data.id, "Livestream.com - " + data.id, "--:--", "li");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            case "tw":
-                var media = new Media(data.id, "Twitch.tv - " + data.id, "--:--", "tw");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            case "jt":
-                var media = new Media(data.id, "Justin.tv - " + data.id, "--:--", "jt");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            case "us":
-                InfoGetter.getUstream(data.id, function(id) {
-                    var media = new Media(id, "Ustream.tv - " + data.id, "--:--", "us");
-                    var item = this.playlist.makeItem(media);
-                    item.queueby = user ? user.name : "";
-                    this.autoTemp(item, user);
-                    this.queueAdd(item, after);
-                    if(callback)
-                        callback();
-                }.bind(this));
-                break;
-            case "rt":
-                var media = new Media(data.id, "Livestream", "--:--", "rt");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            case "jw":
-                var media = new Media(data.id, "JWPlayer Stream - " + data.id, "--:--", "jw");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            case "im":
-                var media = new Media(data.id, "Imgur Album", "--:--", "im");
-                var item = this.playlist.makeItem(media);
-                item.queueby = user ? user.name : "";
-                this.autoTemp(item, user);
-                this.queueAdd(item, after);
-                if(callback)
-                    callback();
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-Channel.prototype.tryQueue = function(user, data) {
-    if(!this.hasPermission(user, "playlistadd")) {
-        return;
-    }
-    if(typeof data.pos !== "string") {
-        return;
-    }
-    if(typeof data.id !== "string" && data.id !== false) {
-        return;
-    }
-    if(typeof data.type !== "string" && !(data.id in this.library)) {
-        return;
-    }
-
-    if(data.pos == "next" && !this.hasPermission(user, "playlistnext")) {
-        return;
-    }
-
-    if(user.rank < Rank.Moderator
-            && this.leader != user
-            && user.noflood("queue", 1.5)) {
-        return;
-    }
-
-    data.queueby = user ? user.name : "";
-
-    if(data.list)
-        this.addMediaList(data, user);
-    else
-        this.addMedia(data, user);
-}
-
-Channel.prototype.addMedia = function(data, user) {
-    data.temp = isLive(data.type) || !this.hasPermission(user, "addnontemp");
-    data.maxlength = this.hasPermission(user, "exceedmaxlength") ? 0 : this.opts.maxlength;
-    var chan = this;
-    if(data.id in this.library) {
-        var m = this.library[data.id].dup();
-        if(data.maxlength && m.seconds > data.maxlength) {
-            user.socket.emit("queueFail", "Media is too long!");
-            return;
-        }
-
-        data.media = m;
-        this.playlist.addCachedMedia(data, function (err, item) {
-            if(err) {
-                if(err === true)
-                    err = false;
-                if(user)
-                    user.socket.emit("queueFail", err);
-                return;
-            }
-            else {
-                chan.sendAll("queue", {
-                    item: item.pack(),
-                    after: item.prev ? item.prev.uid : "prepend"
-                });
-                chan.broadcastPlaylistMeta();
-            }
-        });
-        return;
-    }
-    if(isLive(data.type) && !this.hasPermission(user, "playlistaddlive")) {
-        user.socket.emit("queueFail", "You don't have permission to queue livestreams");
-        return;
-    }
-
-    data.temp = isLive(data.type) || !this.hasPermission(user, "addnontemp");
-    data.queueby = user ? user.name : "";
-
-    this.playlist.addMedia(data, function(err, item) {
-        if(err) {
-            if(err === true)
-                err = false;
-            if(user)
-                user.socket.emit("queueFail", err);
-            return;
-        }
-        else {
-            chan.sendAll("queue", {
-                item: item.pack(),
-                after: item.prev ? item.prev.uid : "prepend"
-            });
-            chan.broadcastPlaylistMeta();
-            chan.cacheMedia(item.media);
-        }
-    });
-}
-
-Channel.prototype.addMediaList = function(data, user) {
-    var pl = data.list;
-    var chan = this;
-    this.playlist.addMediaList(data, function(err, item) {
-        if(err) {
-            if(err === true)
-                err = false;
-            if(user)
-                user.socket.emit("queueFail", err);
-            return;
-        }
-        else {
-            chan.sendAll("queue", {
-                item: item.pack(),
-                after: item.prev ? item.prev.uid : "prepend"
-            });
-            chan.broadcastPlaylistMeta();
-            chan.cacheMedia(item.media);
-        }
-    });
-}
-
 Channel.prototype.tryQueuePlaylist = function(user, data) {
     if(!this.hasPermission(user, "playlistaddlist")) {
         return;
@@ -1297,56 +1093,6 @@ Channel.prototype.tryQueuePlaylist = function(user, data) {
     data.list = pl;
     data.queueby = user.name;
     this.addMediaList(data, user);
-}
-
-Channel.prototype.setTemp = function(uid, temp) {
-    var item = this.playlist.items.find(uid);
-    if(!item)
-        return;
-    item.temp = temp;
-    this.sendAll("setTemp", {
-        uid: uid,
-        temp: temp
-    });
-
-    if(!temp) {
-        this.cacheMedia(item.media);
-    }
-}
-
-Channel.prototype.trySetTemp = function(user, data) {
-    if(!this.hasPermission(user, "settemp")) {
-        return;
-    }
-    if(typeof data.uid != "number" || typeof data.temp != "boolean") {
-        return;
-    }
-
-    this.setTemp(data.uid, data.temp);
-}
-
-
-Channel.prototype.dequeue = function(uid) {
-    var chan = this;
-    function afterDelete() {
-        chan.sendAll("delete", {
-            uid: uid
-        });
-        chan.broadcastPlaylistMeta();
-    }
-    if(!this.playlist.remove(uid, afterDelete))
-        return;
-}
-
-Channel.prototype.tryDequeue = function(user, data) {
-    if(!this.hasPermission(user, "playlistdelete")) {
-        return;
-     }
-
-     if(typeof data !== "number")
-         return;
-
-     this.dequeue(data);
 }
 
 Channel.prototype.tryUncache = function(user, data) {
@@ -1451,34 +1197,6 @@ Channel.prototype.tryUpdate = function(user, data) {
     this.playlist.current.media.currentTime = data.currentTime;
     this.playlist.current.media.paused = data.paused;
     this.sendAll("mediaUpdate", this.playlist.current.media.timeupdate());
-}
-
-Channel.prototype.move = function(data, user) {
-    var chan = this;
-    function afterMove() {
-        var moveby = user && user.name ? user.name : null;
-        if(typeof data.moveby !== "undefined")
-            moveby = data.moveby;
-
-        chan.sendAll("moveVideo", {
-            from: data.from,
-            after: data.after,
-            moveby: moveby
-        });
-    }
-
-    this.playlist.move(data.from, data.after, afterMove);
-}
-
-Channel.prototype.tryMove = function(user, data) {
-    if(!this.hasPermission(user, "playlistmove")) {
-        return;
-    }
-
-    if(typeof data.from !== "number" || (typeof data.after !== "number" && typeof data.after !== "string"))
-        return;
-
-    this.move(data, user);
 }
 
 /* REGION Polls */
