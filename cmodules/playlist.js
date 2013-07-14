@@ -12,6 +12,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 var ULList = require("../ullist").ULList;
 var Priority = require("../priority");
 var Media = require("../media").Media;
+var formatTime = require("../media").formatTime;
 var InfoGetter = require("../get-info");
 
 function PlaylistItem(media, uid) {
@@ -33,6 +34,7 @@ PlaylistItem.prototype.pack = function() {
 }
 
 function Playlist(chan) {
+    this.chan = chan;
     this.items = new ULList();
     this.current = null;
     this.next_uid = 0;
@@ -52,8 +54,11 @@ function Playlist(chan) {
     // Register event handlers
     var pl = this;
     chan.onUserEvent("queue", function(user, data) {
-        // TODO support data.list
         if(!chan.hasPermission(user, "playlistadd"))
+            return false;
+
+        if(typeof data.list !== "undefined"
+            && !chan.hasPermission(user, "playlistaddlist"))
             return false;
 
         if(typeof data.pos !== "string")
@@ -78,8 +83,9 @@ function Playlist(chan) {
         data.maxlength = chan.hasPermission(user, "exceedmaxlength")
                             ? 0
                             : chan.opts.maxlength;
+        var fn = typeof data.list === "undefined" ? pl.addMedia : pl.addMediaList;
         // TODO check if video is cached
-        pl.addMedia(data, function(err, item) {
+        fn.apply(pl, [data, function(err, item) {
             if(err) {
                 if(err === true)
                     err = false;
@@ -92,11 +98,26 @@ function Playlist(chan) {
                     item: item.pack(),
                     after: item.prev ? item.prev.uid : "prepend"
                 });
-                chan.sendAll("setPlaylistMeta", this.calcMeta());
+                chan.sendAll("setPlaylistMeta", pl.calcMeta());
                 chan.cacheMedia(item.media);
             }
-        });
+        }]);
     }, Priority.HIGH);
+
+    chan.onUserEvent("queuePlaylist", function (user, data) {
+        if(!chan.hasPermission(user, "playlistaddlist"))
+            return false;
+
+        if(typeof data.name !== "string" || typeof data.pos !== "string")
+            return false;
+
+        if(data.pos == "next" && !chan.hasPermission(user, "playlistnext"))
+            return false;
+
+        var list = Database.loadUserPlaylist(user.name, data.name);
+        data.list = list;
+        chan.onUserEvent("queue")(user, data);
+    }, Priority.MEDIUM);
 
     chan.onUserEvent("setTemp", function(user, data) {
         if(!chan.hasPermission(user, "settemp"))
@@ -163,6 +184,26 @@ function Playlist(chan) {
         pl.next();
     }, Priority.MEDIUM);
 
+    chan.onUserEvent("mediaUpdate", function (user, data) {
+        if(!this.leading || this.current === null)
+            return false;
+
+        if(isLive(this.current.media.type)
+            && this.current.media.type !== "jw")
+            return false;
+
+        if(user != chan.leader)
+            return false;
+
+        if(typeof data.currentTime !== "number")
+            return false;
+
+        data.paused = data.paused || false;
+        this.current.currentTime = data.currentTime;
+        this.current.paused = data.paused;
+        chan.sendAll("mediaUpdate", this.current.media.timeupdate());
+    }, Priority.MEDIUM);
+
     chan.onUserEvent("clearPlaylist", function (user, data) {
         if(!chan.hasPermission(user, "playlistclear"))
             return false;
@@ -171,6 +212,17 @@ function Playlist(chan) {
 
         chan.sendAll("playlist", []);
         chan.sendAll("setPlaylistMeta", this.calcMeta());
+    }, Priority.MEDIUM);
+
+    chan.onUserEvent("shufflePlaylist", function (user, data) {
+        if(!chan.hasPermission(user, "playlistshuffle"))
+            return false;
+
+        pl.shuffle();
+
+        chan.sendAll("playlist", pl.items.toArray());
+
+        pl.startPlayback();
     }, Priority.MEDIUM);
 
     chan.onUserEvent("requestMedia", function (user, data) {
@@ -185,37 +237,6 @@ function Playlist(chan) {
         if(pl.current !== null)
             user.socket.emit("setCurrent", pl.current.uid);
     }, Priority.MEDIUM);
-
-    if(chan) {
-        this.channel = chan;
-        var pl = this;
-        this.on("mediaUpdate", function(m) {
-            if(chan != pl.channel) {
-                pl.die();
-                return;
-            }
-            chan.sendAll("mediaUpdate", m.timeupdate());
-        });
-        this.on("changeMedia", function(m) {
-            if(chan != pl.channel) {
-                pl.die();
-                return;
-            }
-            chan.onVideoChange();
-            chan.sendAll("setCurrent", pl.current.uid);
-            chan.sendAll("changeMedia", m.fullupdate());
-        });
-        this.on("remove", function(item) {
-            if(chan != pl.channel) {
-                pl.die();
-                return;
-            }
-            chan.broadcastPlaylistMeta();
-            chan.sendAll("delete", {
-                uid: item.uid
-            });
-        });
-    }
 }
 
 Playlist.prototype.calcMeta = function () {
@@ -226,7 +247,7 @@ Playlist.prototype.calcMeta = function () {
             total += iter.media.seconds;
         iter = iter.next;
     }
-    var timestr = foramtTime(total);
+    var timestr = formatTime(total);
     this.meta = {
         count: this.items.length,
         time: timestr
@@ -463,6 +484,9 @@ Playlist.prototype.addYouTubePlaylist = function(data, callback) {
             return;
         }
 
+        if(data.pos === "next")
+            vids.reverse();
+
         vids.forEach(function(media) {
             var it = pl.makeItem(media);
             it.temp = data.temp;
@@ -483,6 +507,10 @@ Playlist.prototype.remove = function(uid, callback) {
         fn: function() {
             var item = pl.items.find(uid);
             if(pl.items.remove(uid)) {
+                pl.chan.sendAll("delete", {
+                    uid: item.uid
+                });
+                pl.chan.sendAll("setPlaylistMeta", pl.calcMeta());
                 if(item == pl.current)
                     pl._next();
                 if(callback)
@@ -533,9 +561,7 @@ Playlist.prototype.next = function() {
 
     if(it.temp) {
         var pl = this;
-        this.remove(it.uid, function() {
-            pl.on("remove")(it);
-        });
+        this.remove(it.uid);
     }
 
     return this.current;
@@ -571,9 +597,7 @@ Playlist.prototype.jump = function(uid) {
 
     if(it.temp) {
         var pl = this;
-        this.remove(it.uid, function () {
-            pl.on("remove")(it);
-        });
+        this.remove(it.uid);
     }
 
     return this.current;
@@ -584,6 +608,22 @@ Playlist.prototype.clear = function() {
     this.next_uid = 0;
     this.current = null;
     clearInterval(this._leadInterval);
+}
+
+Playlist.prototype.shuffle = function () {
+    var n = [];
+    var pl = this.items.toArray(false);
+    this.clear();
+    while(pl.length > 0) {
+        var i = parseInt(Math.random() * pl.length);
+        var item = this.makeItem(pl[i].media);
+        item.temp = pl[i].temp;
+        item.queueby = pl[i].queueby;
+        this.items.append(item);
+        pl.splice(i, 1);
+    }
+
+    this.current = this.items.first;
 }
 
 Playlist.prototype.lead = function(lead) {
@@ -610,7 +650,10 @@ Playlist.prototype.startPlayback = function(time) {
         clearInterval(this._leadInterval);
         this._leadInterval = false;
     }
-    this.on("changeMedia")(this.current.media);
+    // TODO change to chan.onEvent("changeMedia")
+    this.chan.onVideoChange();
+    this.chan.sendAll("setCurrent", this.current.uid);
+    this.chan.sendAll("changeMedia", this.current.media.fullupdate());
     if(this.leading && !isLive(this.current.media.type)) {
         this._lastUpdate = Date.now();
         this._leadInterval = setInterval(function() {
@@ -643,7 +686,7 @@ Playlist.prototype._leadLoop = function() {
         this.next();
     }
     else if(this._counter % UPDATE_INTERVAL == 0) {
-        this.on("mediaUpdate")(this.current.media);
+        this.chan.sendAll("mediaUpdate", this.current.media.timeupdate());
     }
 }
 

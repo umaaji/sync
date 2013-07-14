@@ -84,9 +84,15 @@ User.prototype.noflood = function(name, hz) {
 User.prototype.initCallbacks = function() {
     const cmodevents = [
         "queue",
+        "queuePlaylist",
         "setTemp",
         "delete",
-        "moveMedia"
+        "moveMedia",
+        "playNext",
+        "jumpTo",
+        "mediaUpdate",
+        "clearPlaylist",
+        "shufflePlaylist",
     ];
 
     cmodevents.forEach(function (ev) {
@@ -211,39 +217,9 @@ User.prototype.initCallbacks = function() {
         }
     }.bind(this));
 
-    this.socket.on("jumpTo", function(data) {
-        if(this.channel != null) {
-            this.channel.tryJumpTo(this, data);
-        }
-    }.bind(this));
-
-    this.socket.on("playNext", function() {
-        if(this.channel != null) {
-            this.channel.tryPlayNext(this);
-        }
-    }.bind(this));
-
-    this.socket.on("clearPlaylist", function() {
-        if(this.channel != null) {
-            this.channel.tryClearqueue(this);
-        }
-    }.bind(this));
-
-    this.socket.on("shufflePlaylist", function() {
-        if(this.channel != null) {
-            this.channel.tryShufflequeue(this);
-        }
-    }.bind(this));
-
     this.socket.on("togglePlaylistLock", function() {
         if(this.channel != null) {
             this.channel.tryToggleLock(this);
-        }
-    }.bind(this));
-
-    this.socket.on("mediaUpdate", function(data) {
-        if(this.channel != null) {
-            this.channel.tryUpdate(this, data);
         }
     }.bind(this));
 
@@ -479,12 +455,6 @@ User.prototype.initCallbacks = function() {
         this.socket.emit("listPlaylists", {
             pllist: list,
         });
-    }.bind(this));
-
-    this.socket.on("queuePlaylist", function(data) {
-        if(this.channel != null) {
-            this.channel.tryQueuePlaylist(this, data);
-        }
     }.bind(this));
 
     this.socket.on("deletePlaylist", function(data) {

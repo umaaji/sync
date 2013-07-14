@@ -88,7 +88,7 @@ Player.prototype.initYouTube = function() {
         },
         events: {
             onReady: function() {
-                socket.emit("playerReady");
+                socket.emit("requestMedia");
             },
             onStateChange: function(ev) {
                 if(PLAYER.paused && ev.data != YT.PlayerState.PAUSED
@@ -155,7 +155,7 @@ Player.prototype.initVimeo = function() {
 
     this.player = $f(iframe[0]);
     $f(iframe[0]).addEvent("ready", function() {
-        socket.emit("playerReady");
+        socket.emit("requestMedia");
         this.player = $f(iframe[0]);
         this.player.api("play");
 
@@ -215,7 +215,7 @@ Player.prototype.initDailymotion = function() {
     });
 
     this.player.addEventListener("apiready", function(e) {
-        socket.emit("playerReady");
+        socket.emit("requestMedia");
         this.player.addEventListener("ended", function(e) {
             if(CLIENT.leader) {
                 socket.emit("playNext");
@@ -273,7 +273,7 @@ Player.prototype.initSoundcloud = function() {
     this.player = SC.Widget("ytapiplayer");
 
     this.player.bind(SC.Widget.Events.READY, function() {
-        socket.emit("playerReady");
+        socket.emit("requestMedia");
         this.player.load(this.id, {auto_play: true});
 
         this.player.bind(SC.Widget.Events.PAUSE, function() {

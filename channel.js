@@ -1019,88 +1019,6 @@ Channel.prototype.onVideoChange = function () {
     this.broadcastDrinks();
 }
 
-// The server autolead function
-function mediaUpdate(chan, id) {
-    // Bail cases - video changed, someone's leader, no video playing
-    if(chan.media == null ||
-           id != chan.media.id ||
-           chan.leader != null ||
-           chan.users.length == 0) {
-        return;
-    }
-
-    chan.media.currentTime += (new Date().getTime() - chan.time) / 1000.0;
-    chan.time = new Date().getTime();
-
-    // Show's over, move on to the next thing
-    if(chan.media.currentTime > chan.media.seconds + 1) {
-        chan.playNext();
-    }
-    // Send updates about every 5 seconds
-    else if(chan.i % 5 == 0) {
-        chan.sendAll("mediaUpdate", chan.media.timeupdate());
-    }
-    chan.i++;
-
-    setTimeout(function() { mediaUpdate(chan, id); }, 1000);
-}
-
-function isLive(type) {
-    return type == "li" // Livestream.com
-        || type == "tw" // Twitch.tv
-        || type == "jt" // Justin.tv
-        || type == "rt" // RTMP
-        || type == "jw" // JWPlayer
-        || type == "us" // Ustream.tv
-        || type == "im";// Imgur album
-}
-
-Channel.prototype.queueAdd = function(item, after) {
-    var chan = this;
-    function afterAdd() {
-        chan.sendAll("queue", {
-            item: item.pack(),
-            after: after
-        });
-        chan.broadcastPlaylistMeta();
-    }
-    if(after === "prepend")
-        this.playlist.prepend(item, afterAdd);
-    else if(after === "append")
-        this.playlist.append(item, afterAdd);
-    else
-        this.playlist.insertAfter(item, after, afterAdd);
-}
-
-Channel.prototype.autoTemp = function(item, user) {
-    if(isLive(item.media.type)) {
-        item.temp = true;
-    }
-    if(!this.hasPermission(user, "addnontemp")) {
-        item.temp = true;
-    }
-}
-
-Channel.prototype.tryQueuePlaylist = function(user, data) {
-    if(!this.hasPermission(user, "playlistaddlist")) {
-        return;
-    }
-
-    if(typeof data.name != "string" ||
-       typeof data.pos != "string") {
-        return;
-    }
-
-    if(data.pos == "next" && !this.hasPermission(user, "playlistnext")) {
-        return;
-    }
-
-    var pl = Database.loadUserPlaylist(user.name, data.name);
-    data.list = pl;
-    data.queueby = user.name;
-    this.addMediaList(data, user);
-}
-
 Channel.prototype.tryUncache = function(user, data) {
     if(!Rank.hasPermission(user, "uncache")) {
         return;
@@ -1111,98 +1029,6 @@ Channel.prototype.tryUncache = function(user, data) {
     if(Database.removeFromLibrary(this.name, data.id)) {
         delete this.library[data.id];
     }
-}
-
-Channel.prototype.playNext = function() {
-    this.playlist.next();
-}
-
-Channel.prototype.tryPlayNext = function(user) {
-    if(!this.hasPermission(user, "playlistjump")) {
-         return;
-    }
-
-    this.playNext();
-}
-
-Channel.prototype.jumpTo = function(uid) {
-    return this.playlist.jump(uid);
-}
-
-Channel.prototype.tryJumpTo = function(user, data) {
-    if(!this.hasPermission(user, "playlistjump")) {
-         return;
-    }
-
-    if(typeof data !== "number") {
-        return;
-    }
-
-    this.jumpTo(data);
-}
-
-Channel.prototype.clearqueue = function() {
-    this.playlist.clear();
-    this.sendAll("playlist", this.playlist.items.toArray());
-    this.broadcastPlaylistMeta();
-}
-
-Channel.prototype.tryClearqueue = function(user) {
-    if(!this.hasPermission(user, "playlistclear")) {
-        return;
-    }
-    this.clearqueue();
-}
-
-Channel.prototype.shufflequeue = function() {
-    var n = [];
-    var pl = this.playlist.items.toArray(false);
-    this.playlist.clear();
-    while(pl.length > 0) {
-        var i = parseInt(Math.random() * pl.length);
-        var item = this.playlist.makeItem(pl[i].media);
-        item.temp = pl[i].temp;
-        item.queueby = pl[i].queueby;
-        this.playlist.items.append(item);
-        pl.splice(i, 1);
-    }
-    this.playlist.current = this.playlist.items.first;
-    this.sendAll("playlist", this.playlist.items.toArray());
-    this.sendAll("setPlaylistMeta", this.plmeta);
-    this.playlist.startPlayback();
-}
-
-Channel.prototype.tryShufflequeue = function(user) {
-    if(!this.hasPermission(user, "playlistshuffle")) {
-        return;
-    }
-    this.shufflequeue();
-}
-
-Channel.prototype.tryUpdate = function(user, data) {
-    if(this.leader != user) {
-        return;
-    }
-
-    if(typeof data.id !== "string" || typeof data.currentTime !== "number")
-           return;
-
-    if(this.playlist.current === null) {
-        return;
-    }
-
-    if(isLive(this.playlist.current.media.type)
-        && this.playlist.current.media.type != "jw") {
-        return;
-    }
-
-    if(this.playlist.current.media.id != data.id) {
-        return;
-    }
-
-    this.playlist.current.media.currentTime = data.currentTime;
-    this.playlist.current.media.paused = data.paused;
-    this.sendAll("mediaUpdate", this.playlist.current.media.timeupdate());
 }
 
 /* REGION Polls */
@@ -1676,14 +1502,6 @@ Channel.prototype.changeLeader = function(name) {
     }
     if(name == "") {
         this.logger.log("*** Resuming autolead");
-        /*
-        if(this.playlist.current != null && !isLive(this.playlist.current.media.type)) {
-            this.playlist.current.media.paused = false;
-            this.time = new Date().getTime();
-            this.i = 0;
-            mediaUpdate(this, this.playlist.current.media.id);
-        }
-        */
         this.playlist.lead(true);
         return;
     }
