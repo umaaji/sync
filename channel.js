@@ -309,14 +309,16 @@ function incrementalDump(chan) {
 
 Channel.prototype.tryRegister = function(user) {
     if(this.registered) {
-        ActionLog.record(user.ip, user.name, "channel-register-failure", [this.name]);
+        ActionLog.record(user.ip, user.name, "channel-register-failure", [
+            this.name, "Channel already registered"]);
         user.socket.emit("registerChannel", {
             success: false,
             error: "This channel is already registered"
         });
     }
     else if(!user.loggedIn) {
-        ActionLog.record(user.ip, user.name, "channel-register-failure", [this.name]);
+        ActionLog.record(user.ip, user.name, "channel-register-failure", [
+            this.name, "Not logged in"]);
         user.socket.emit("registerChannel", {
             success: false,
             error: "You must log in to register a channel"
@@ -324,7 +326,8 @@ Channel.prototype.tryRegister = function(user) {
 
     }
     else if(!Rank.hasPermission(user, "registerChannel")) {
-        ActionLog.record(user.ip, user.name, "channel-register-failure", [this.name]);
+        ActionLog.record(user.ip, user.name, "channel-register-failure", [
+            this.name, "Insufficient permissions"]);
         user.socket.emit("registerChannel", {
             success: false,
             error: "You don't have permission to register this channel"
@@ -332,7 +335,7 @@ Channel.prototype.tryRegister = function(user) {
     }
     else {
         if(Database.registerChannel(this.name, user.name)) {
-            ActionLog.record(user.ip, user.name, "channel-register-success", [this.name]);
+            ActionLog.record(user.ip, user.name, "channel-register-success", this.name);
             this.registered = true;
             this.initialized = true;
             this.saveDump();
@@ -678,6 +681,7 @@ Channel.prototype.userLeave = function(user) {
     this.logger.log("--- /" + user.ip + " (" + user.name + ") left");
     if(this.users.length == 0) {
         this.logger.log("*** Channel empty, unloading");
+        var name = this.name;
         Server.unload(this);
     }
 }
@@ -1011,6 +1015,8 @@ Channel.prototype.broadcastDrinks = function() {
 Channel.prototype.onVideoChange = function () {
     this.voteskip = false;
     this.broadcastVoteskipUpdate();
+    this.drinks = 0;
+    this.broadcastDrinks();
 }
 
 // The server autolead function

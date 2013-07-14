@@ -18,7 +18,7 @@ module.exports = {
     init: function(user) {
         ActionLog.record(user.ip, user.name, "acp-init");
         user.socket.on("acp-announce", function(data) {
-            ActionLog.record(user.ip, user.name, "acp-announce", [data]);
+            ActionLog.record(user.ip, user.name, "acp-announce", data);
             Server.announcement = data;
             Server.io.sockets.emit("announcement", data);
         });
@@ -29,13 +29,13 @@ module.exports = {
         });
 
         user.socket.on("acp-global-ban", function(data) {
-            ActionLog.record(user.ip, user.name, "acp-global-ban", [data.ip]);
+            ActionLog.record(user.ip, user.name, "acp-global-ban", data.ip);
             Database.globalBanIP(data.ip, data.note);
             user.socket.emit("acp-global-banlist", Database.refreshGlobalBans());
         });
 
         user.socket.on("acp-global-unban", function(ip) {
-            ActionLog.record(user.ip, user.name, "acp-global-unban", [ip]);
+            ActionLog.record(user.ip, user.name, "acp-global-unban", ip);
             Database.globalUnbanIP(ip);
             user.socket.emit("acp-global-banlist", Database.refreshGlobalBans());
         });
@@ -66,7 +66,7 @@ module.exports = {
                 return;
             try {
                 var hash = Database.generatePasswordReset(user.ip, data.name, data.email);
-                ActionLog.record(user.ip, user.name, "acp-reset-password", [data.name]);
+                ActionLog.record(user.ip, user.name, "acp-reset-password", data.name);
             }
             catch(e) {
                 user.socket.emit("acp-reset-password", {
@@ -101,7 +101,7 @@ module.exports = {
             if(!db)
                 return;
 
-            ActionLog.record(user.ip, user.name, "acp-set-rank", [data]);
+            ActionLog.record(user.ip, user.name, "acp-set-rank", data);
             var query = Database.createQuery(
                 "UPDATE registrations SET global_rank=? WHERE uname=?",
                 [data.rank, data.name]
@@ -116,8 +116,9 @@ module.exports = {
 
         user.socket.on("acp-list-loaded", function() {
             var chans = [];
-            for(var c in Server.channels) {
-                var chan = Server.channels[c];
+            var all = Server.getAllChannels();
+            for(var c in all) {
+                var chan = all[c];
                 if(!chan)
                     continue;
 
@@ -135,8 +136,8 @@ module.exports = {
         });
 
         user.socket.on("acp-channel-unload", function(data) {
-            if(data.name in Server.channels) {
-                var c = Server.channels[data.name];
+            if(Server.getChannel(data.name) !== undefined) {
+                var c = Server.getChannel(data.name);
                 if(!c)
                     return;
                 ActionLog.record(user.ip, user.name, "acp-channel-unload");
@@ -144,13 +145,23 @@ module.exports = {
                 c.users.forEach(function(u) {
                     c.kick(u, "Channel shutting down");
                 });
-                Server.unload(c);
+
+                // At this point c should be unloaded
+                // if it's still loaded, kill it
+                c = Server.getChannel(data.name);
+                if(c !== undefined)
+                    Server.unload(c);
             }
         });
 
         user.socket.on("acp-actionlog-clear", function(data) {
             ActionLog.clear(data);
             ActionLog.record(user.ip, user.name, "acp-actionlog-clear", data);
+        });
+
+        user.socket.on("acp-actionlog-clear-one", function(data) {
+            ActionLog.clearOne(data);
+            ActionLog.record(user.ip, user.name, "acp-actionlog-clear-one", data);
         });
     }
 }

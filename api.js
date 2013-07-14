@@ -34,12 +34,13 @@ var jsonHandlers = {
     "getprofile" : handleProfileGet,
     "setemail"   : handleEmailChange,
     "admreports" : handleAdmReports,
+    "readactionlog" : handleReadActionLog
 };
 
 function getClientIP(req) {
     var ip;
     var forward = req.header("x-forwarded-for");
-    if(forward) {
+    if(Config.REVERSE_PROXY && forward) {
         ip = forward.split(",")[0];
     }
     if(!ip) {
@@ -130,11 +131,11 @@ function handleChannelData(params, req, res) {
         }
         var d = {
             name: cname,
-            loaded: (cname in Server.channels)
+            loaded: Server.getChannel(cname) !== undefined
         };
 
         if(d.loaded) {
-            var chan = Server.channels[cname];
+            var chan = Server.getChannel(cname);
             d.pagetitle = chan.opts.pagetitle;
             d.media = chan.playlist.current ? chan.playlist.current.media.pack() : {};
             d.usercount = chan.users.length;
@@ -157,9 +158,10 @@ function handleChannelData(params, req, res) {
 
 function handleChannelList(params, req, res) {
     if(params.filter == "public") {
+        var all = Server.getAllChannels();
         var clist = [];
-        for(var key in Server.channels) {
-            if(Server.channels[key].opts.show_public) {
+        for(var key in all) {
+            if(all[key].opts.show_public) {
                 clist.push(key);
             }
         }
@@ -174,7 +176,7 @@ function handleChannelList(params, req, res) {
         return;
     }
     var clist = [];
-    for(var key in Server.channels) {
+    for(var key in Server.getAllChannels()) {
         clist.push(key);
     }
     handleChannelData({channel: clist.join(",")}, req, res);
@@ -256,7 +258,7 @@ function handlePasswordReset(params, req, res) {
     var hash = false;
     try {
         hash = Database.generatePasswordReset(ip, name, email);
-        ActionLog.record(ip, name, "password-reset-generate");
+        ActionLog.record(ip, name, "password-reset-generate", email);
     }
     catch(e) {
         sendJSON(res, {
@@ -270,6 +272,13 @@ function handlePasswordReset(params, req, res) {
         sendJSON(res, {
             success: false,
             error: "This server does not have email enabled.  Contact an administrator"
+        });
+        return;
+    }
+    if(!email) {
+        sendJSON(res, {
+            success: false,
+            error: "You don't have a recovery email address set.  Contact an administrator"
         });
         return;
     }
@@ -384,8 +393,9 @@ function handleProfileChange(params, req, res) {
         error: result ? "" : "Internal error.  Contact an administrator"
     });
 
-    for(var n in Server.channels) {
-        var chan = Server.channels[n];
+    var all = Server.getAllChannels();
+    for(var n in all) {
+        var chan = all[n];
         for(var i = 0; i < chan.users.length; i++) {
             if(chan.users[i].name.toLowerCase() == name) {
                 chan.users[i].profile = {
@@ -429,7 +439,7 @@ function handleEmailChange(params, req, res) {
     var row = Auth.login(name, pw);
     if(row) {
         var success = Database.setUserEmail(name, email);
-        ActionLog.record(getClientIP(req), name, "email-update", [email]);
+        ActionLog.record(getClientIP(req), name, "email-update", email);
         sendJSON(res, {
             success: success,
             error: success ? "" : "Email update failed",
@@ -447,6 +457,17 @@ function handleEmailChange(params, req, res) {
 function handleRegister(params, req, res) {
     var name = params.name || "";
     var pw = params.pw || "";
+    if(ActionLog.tooManyRegistrations(getClientIP(req))) {
+        ActionLog.record(getClientIP(req), name, "register-failure",
+            "Too many recent registrations from this IP");
+        sendJSON(res, {
+            success: false,
+            error: "Your IP address has registered several accounts in "+
+                   "the past 48 hours.  Please wait a while or ask an "+
+                   "administrator for assistance."
+        });
+        return;
+    }
 
     if(pw == "") {
         sendJSON(res, {
@@ -456,7 +477,8 @@ function handleRegister(params, req, res) {
         return;
     }
     else if(Auth.isRegistered(name)) {
-        ActionLog.record(getClientIP(req), name, "register-failure");
+        ActionLog.record(getClientIP(req), name, "register-failure",
+            "Name taken");
         sendJSON(res, {
             success: false,
             error: "That username is already taken"
@@ -464,7 +486,8 @@ function handleRegister(params, req, res) {
         return false;
     }
     else if(!Auth.validateName(name)) {
-        ActionLog.record(getClientIP(req), name, "register-failure");
+        ActionLog.record(getClientIP(req), name, "register-failure",
+            "Invalid name");
         sendJSON(res, {
             success: false,
             error: "Invalid username.  Usernames must be 1-20 characters long and consist only of alphanumeric characters and underscores"
@@ -493,6 +516,20 @@ function handleAdmReports(params, req, res) {
     sendJSON(res, {
         error: "Not implemented"
     });
+}
+
+function handleReadActionLog(params, req, res) {
+    var name = params.name || "";
+    var pw = params.pw || "";
+    var session = params.session || "";
+    var row = Auth.login(name, pw, session);
+    if(!row || row.global_rank < 255) {
+        res.send(403);
+        return;
+    }
+
+    var actions = ActionLog.readLog();
+    sendJSON(res, actions);
 }
 
 // Helper function
@@ -528,10 +565,6 @@ function handleReadLog(params, req, res) {
     }
     else if(type == "err") {
         pipeLast(res, "error.log", 1024*1024);
-    }
-    else if(type == "action") {
-        ActionLog.flush();
-        pipeLast(res, "action.log", 1024*1024*100);
     }
     else if(type == "channel") {
         var chan = params.channel || "";

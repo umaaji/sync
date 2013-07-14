@@ -9,7 +9,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-const VERSION = "2.0.4";
+const VERSION = "2.0.5";
 
 var fs = require("fs");
 var Logger = require("./logger.js");
@@ -106,7 +106,7 @@ var Database = require("./database.js");
 Database.setup(Config);
 Database.init();
 
-exports.channels = {};
+var channels = {};
 exports.clients = {};
 
 fs.exists("chandump", function(exists) {
@@ -181,12 +181,34 @@ if(!Config.DEBUG) {
 
 function shutdown() {
     Logger.syslog.log("Unloading channels...");
-    for(var name in exports.channels) {
-        if(exports.channels[name].registered)
-            exports.channels[name].saveDump();
+    for(var name in channels) {
+        if(channels[name].registered)
+            channels[name].saveDump();
     }
     Logger.syslog.log("Shutting Down");
     process.exit(0);
+}
+
+exports.getChannel = function (name) {
+    return channels[name];
+}
+
+exports.getAllChannels = function () {
+    return channels;
+}
+
+var Channel = require("./channel.js").Channel;
+exports.createChannel = function (name) {
+    var chan = new Channel(name);
+    channels[name] = chan;
+    return chan;
+}
+
+exports.getOrCreateChannel = function (name) {
+    var chan = exports.getChannel(name);
+    if(chan !== undefined)
+        return chan;
+    return exports.createChannel(name);
 }
 
 exports.unload = function(chan) {
@@ -194,6 +216,7 @@ exports.unload = function(chan) {
         chan.saveDump();
     }
     chan.playlist.die();
-    exports.channels[chan.name] = null;
-    delete exports.channels[chan.name];
+    delete channels[chan.name];
+    for(var i in chan)
+        delete chan[i];
 }
